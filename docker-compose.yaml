@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  panorganon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: panorganon
+    restart: unless-stopped
+
+    # Environment variables
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+
+    # Ports (uncomment if using HTTP transport)
+    ports:
+      - "8080:8080"
+
+    # Volumes for persistence
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - panorganon-data:/app/data
+      - panorganon-logs:/app/logs
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "pgrep", "panorganon"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  panorganon-data:
+    driver: local
+  panorganon-logs:
+    driver: local

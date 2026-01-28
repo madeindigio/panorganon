@@ -1,0 +1,38 @@
+server:
+  stdio:
+    enabled: true
+  http:
+    enabled: true
+    port: 8080
+    endpoint: "/mcp"
+
+logging:
+  level: info
+  file: "./logs/panorganon.log"
+
+database:
+  path: "./panorganon.db"
+
+sampling:
+  provider: "anthropic"
+  api_key: "${ANTHROPIC_API_KEY}"
+  model: "claude-3-5-sonnet-20241022"
+
+downstream_servers:
+  - name: "remembrances-mcp"
+    type: "stdio"
+    command: "remembrances-mcp-beta"
+    args:
+      - "--config"
+      - "/www/MCP/panorganon/.ai/remembrances.config.yaml"
+    env: {}
+    keepalive: false
+
+  - name: "hyper-mcp"
+    type: "stdio"
+    command: "hyper-mcp"
+    args:
+      - "--config-file"
+      - "/home/sevir/.config/hyper-mcp/search.yaml"
+    env: {}
+    keepalive: false
