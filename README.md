@@ -10,6 +10,7 @@
 - **Flexible Server Management**: On-demand and keep-alive modes for downstream servers
 - **Database Caching**: SQLite-based caching for fast tool lookup
 - **Structured Logging**: Comprehensive logging with rotation support
+- **Lua Filters**: Intercept and modify tool calls for security, privacy, and auditing
 
 ## Installation
 
@@ -127,6 +128,71 @@ Force refresh of tool metadata cache.
 
 **Returns:** Success status and number of tools refreshed.
 
+## Lua Filters
+
+Panorganon includes a powerful Lua-based filtering system that allows you to intercept and modify tool calls to downstream MCP servers. This enables:
+
+- **Security**: Redact API keys, tokens, and sensitive data
+- **Privacy**: Filter system paths and personal information
+- **Auditing**: Log all tool calls with custom metadata
+- **Validation**: Enforce business rules and constraints
+- **Transformation**: Modify data on the fly
+
+### Quick Start
+
+1. **Enable filters** in your `config.yaml`:
+
+```yaml
+filters:
+  enabled: true
+  script_path: "./filters/panorganon-filters.lua"
+  timeout: 5s
+  strict_mode: false
+```
+
+2. **Create a filter script** (`filters/panorganon-filters.lua`):
+
+```lua
+-- Block sensitive searches
+_G["remembrances-mcp-input"] = function(context)
+    local params = context.parameters
+
+    if params.query and string.match(params.query, "password") then
+        error("Search for passwords blocked")
+    end
+
+    return params
+end
+
+-- Redact API keys in responses
+_G["hyper-mcp-output"] = function(context)
+    local result = context.result
+
+    if result.content then
+        for i, item in ipairs(result.content) do
+            if item.type == "text" and item.text then
+                item.text = string.gsub(item.text, "sk%-[a-zA-Z0-9]+", "sk-[REDACTED]")
+            end
+        end
+    end
+
+    return result
+end
+```
+
+3. **Restart Panorganon** and filters will be applied automatically.
+
+### Learn More
+
+For comprehensive documentation on Lua filters including:
+- Filter function naming conventions
+- Available Lua modules
+- Security best practices
+- Example filters for common use cases
+- Debugging and troubleshooting
+
+See the complete [Lua Filters Documentation](docs/lua-filters.md).
+
 ## Architecture
 
 ```
@@ -139,10 +205,15 @@ panorganon/
 │   ├── downstream/          # Downstream server management
 │   ├── tools/               # Tool discovery and execution
 │   ├── database/            # SQLite database layer
+│   ├── luafilters/          # Lua filter system
 │   └── logging/             # Structured logging
 ├── pkg/
 │   └── version/             # Version information
-└── examples/                # Example configurations
+├── docs/                    # Documentation
+└── examples/                # Example configurations and filters
+    ├── config.example.yaml
+    └── filters/
+        └── panorganon-filters.lua
 ```
 
 ## Development

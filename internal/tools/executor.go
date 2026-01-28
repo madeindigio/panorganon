@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/sevir/panorganon/internal/database"
 	"github.com/sevir/panorganon/internal/downstream"
+	"github.com/sevir/panorganon/internal/luafilters"
 	"go.uber.org/zap"
 )
 
@@ -25,19 +27,21 @@ type ExecutionResult struct {
 
 // ExecutorService handles tool execution on downstream servers
 type ExecutorService struct {
-	manager       *downstream.Manager
-	db            *database.DB
-	logger        *zap.Logger
+	manager        *downstream.Manager
+	db             *database.DB
+	logger         *zap.Logger
+	filterManager  *luafilters.FilterManager
 	defaultTimeout time.Duration
 	maxRetries     int
 }
 
 // NewExecutorService creates a new executor service
-func NewExecutorService(manager *downstream.Manager, db *database.DB, logger *zap.Logger) *ExecutorService {
+func NewExecutorService(manager *downstream.Manager, db *database.DB, logger *zap.Logger, filterManager *luafilters.FilterManager) *ExecutorService {
 	return &ExecutorService{
 		manager:        manager,
 		db:             db,
 		logger:         logger.With(zap.String("component", "executor")),
+		filterManager:  filterManager,
 		defaultTimeout: 60 * time.Second,
 		maxRetries:     3,
 	}
@@ -78,6 +82,38 @@ func (e *ExecutorService) ExecTool(ctx context.Context, toolName string, paramet
 			Duration: time.Since(startTime),
 			Error:    fmt.Sprintf("parameter validation failed: %v", err),
 		}, fmt.Errorf("parameter validation failed: %w", err)
+	}
+
+	// 🔵 HOOK POINT 1: Apply input filter before execution
+	if e.filterManager != nil && e.filterManager.IsEnabled() {
+		requestID := uuid.New().String()
+		hookCtx := luafilters.NewInputContext(server, toolName, parameters, requestID)
+
+		filterResult, filterErr := e.filterManager.ApplyInputFilter(ctx, hookCtx)
+		if filterErr != nil {
+			e.logger.Error("Input filter error",
+				zap.String("tool", toolName),
+				zap.String("server", server),
+				zap.Error(filterErr),
+			)
+			return &ExecutionResult{
+				ToolName: toolName,
+				Server:   server,
+				Success:  false,
+				Duration: time.Since(startTime),
+				Error:    fmt.Sprintf("input filter error: %v", filterErr),
+			}, fmt.Errorf("input filter error: %w", filterErr)
+		}
+
+		if filterResult.Modified {
+			e.logger.Debug("Input parameters filtered",
+				zap.String("tool", toolName),
+				zap.String("server", server),
+				zap.Duration("filter_time", filterResult.ExecutionTime),
+			)
+			// Use filtered parameters for execution
+			parameters = filterResult.Data
+		}
 	}
 
 	// Execute with retries
@@ -250,6 +286,8 @@ func (e *ExecutorService) validateType(value interface{}, expectedType string) b
 
 // executeTool performs the actual tool execution
 func (e *ExecutorService) executeTool(ctx context.Context, serverName string, toolName string, parameters map[string]interface{}) (*mcp.CallToolResult, error) {
+	startTime := time.Now()
+
 	// Get or start the server
 	client, err := e.manager.GetOrStart(ctx, serverName)
 	if err != nil {
@@ -264,6 +302,39 @@ func (e *ExecutorService) executeTool(ctx context.Context, serverName string, to
 	result, err := client.CallTool(execCtx, toolName, parameters)
 	if err != nil {
 		return nil, fmt.Errorf("tool call failed: %w", err)
+	}
+
+	duration := time.Since(startTime)
+
+	// 🔵 HOOK POINT 2: Apply output filter after execution
+	if e.filterManager != nil && e.filterManager.IsEnabled() {
+		requestID := uuid.New().String()
+
+		// Convert result to map for filtering
+		resultMap := resultToMap(result)
+
+		// Create hook context
+		hookCtx := luafilters.NewOutputContext(serverName, toolName, resultMap, requestID, duration)
+
+		// Apply output filter
+		filterResult, filterErr := e.filterManager.ApplyOutputFilter(ctx, hookCtx)
+		if filterErr != nil {
+			e.logger.Error("Output filter error",
+				zap.String("tool", toolName),
+				zap.String("server", serverName),
+				zap.Error(filterErr),
+			)
+			// In case of filter error, return the original result
+			// unless strict mode would have prevented this earlier
+		} else if filterResult.Modified {
+			e.logger.Debug("Output result filtered",
+				zap.String("tool", toolName),
+				zap.String("server", serverName),
+				zap.Duration("filter_time", filterResult.ExecutionTime),
+			)
+			// Convert filtered map back to mcp.CallToolResult
+			result = mapToResult(filterResult.Data)
+		}
 	}
 
 	// Stop server if not keepalive
@@ -323,4 +394,96 @@ func containsHelper(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// resultToMap converts mcp.CallToolResult to a map for Lua filters
+func resultToMap(result *mcp.CallToolResult) map[string]interface{} {
+	if result == nil {
+		return make(map[string]interface{})
+	}
+
+	m := make(map[string]interface{})
+
+	// Convert content array
+	if result.Content != nil {
+		contentArray := make([]interface{}, len(result.Content))
+		for i, item := range result.Content {
+			contentItem := make(map[string]interface{})
+
+			switch v := item.(type) {
+			case mcp.TextContent:
+				contentItem["type"] = "text"
+				contentItem["text"] = v.Text
+			case mcp.ImageContent:
+				contentItem["type"] = "image"
+				contentItem["data"] = v.Data
+				contentItem["mimeType"] = v.MIMEType
+			case mcp.EmbeddedResource:
+				contentItem["type"] = "resource"
+				// Add resource fields as needed
+			default:
+				contentItem["type"] = "unknown"
+			}
+
+			contentArray[i] = contentItem
+		}
+		m["content"] = contentArray
+	}
+
+	// Add is_error field
+	m["isError"] = result.IsError
+
+	return m
+}
+
+// mapToResult converts a filtered map back to mcp.CallToolResult
+func mapToResult(m map[string]interface{}) *mcp.CallToolResult {
+	result := &mcp.CallToolResult{}
+
+	// Convert content array
+	if contentVal, ok := m["content"].([]interface{}); ok {
+		content := make([]mcp.Content, 0, len(contentVal))
+		for _, item := range contentVal {
+			if itemMap, ok := item.(map[string]interface{}); ok {
+				itemType, _ := itemMap["type"].(string)
+
+				switch itemType {
+				case "text":
+					if text, ok := itemMap["text"].(string); ok {
+						content = append(content, mcp.TextContent{
+							Type: "text",
+							Text: text,
+						})
+					}
+				case "image":
+					imageContent := mcp.ImageContent{
+						Type: "image",
+					}
+					if data, ok := itemMap["data"].(string); ok {
+						imageContent.Data = data
+					}
+					if mimeType, ok := itemMap["mimeType"].(string); ok {
+						imageContent.MIMEType = mimeType
+					}
+					content = append(content, imageContent)
+				default:
+					// For unknown types, try to preserve as text
+					if text, ok := itemMap["text"].(string); ok {
+						content = append(content, mcp.TextContent{
+							Type: "text",
+							Text: text,
+						})
+					}
+				}
+			}
+		}
+		result.Content = content
+	}
+
+	// Convert isError field
+	if isError, ok := m["isError"].(bool); ok {
+		result.IsError = isError
+	}
+
+	return result
 }

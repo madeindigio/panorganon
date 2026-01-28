@@ -18,6 +18,14 @@ sampling:
   api_key: "${ANTHROPIC_API_KEY}"
   model: "claude-3-5-sonnet-20241022"
 
+filters:
+  enabled: false
+  script_path: "./examples/filters/panorganon-filters.lua"
+  timeout: 5s
+  strict_mode: false
+  hot_reload: false
+  log_filtered_data: false
+
 downstream_servers:
   - name: "remembrances-mcp"
     type: "stdio"

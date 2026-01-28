@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -13,6 +14,7 @@ type Config struct {
 	Logging            LoggingConfig        `mapstructure:"logging"`
 	Database           DatabaseConfig       `mapstructure:"database"`
 	Sampling           SamplingConfig       `mapstructure:"sampling"`
+	Filters            FiltersConfig        `mapstructure:"filters"`
 	DownstreamServers  []DownstreamServer   `mapstructure:"downstream_servers"`
 }
 
@@ -52,6 +54,16 @@ type SamplingConfig struct {
 	Model    string `mapstructure:"model"`
 }
 
+// FiltersConfig defines Lua filter parameters
+type FiltersConfig struct {
+	Enabled         bool          `mapstructure:"enabled"`
+	ScriptPath      string        `mapstructure:"script_path"`
+	Timeout         time.Duration `mapstructure:"timeout"`
+	StrictMode      bool          `mapstructure:"strict_mode"`
+	HotReload       bool          `mapstructure:"hot_reload"`
+	LogFilteredData bool          `mapstructure:"log_filtered_data"`
+}
+
 // DownstreamServer represents a downstream MCP server configuration
 type DownstreamServer struct {
 	Name      string            `mapstructure:"name"`
@@ -83,10 +95,16 @@ func LoadConfig(configPath string) (*Config, error) {
 
 	// Expand environment variables in sensitive fields
 	cfg.Sampling.APIKey = os.ExpandEnv(cfg.Sampling.APIKey)
+	cfg.Filters.ScriptPath = os.ExpandEnv(cfg.Filters.ScriptPath)
 	for i := range cfg.DownstreamServers {
 		for k, v := range cfg.DownstreamServers[i].Env {
 			cfg.DownstreamServers[i].Env[k] = os.ExpandEnv(v)
 		}
+	}
+
+	// Set default values for filters if not specified
+	if cfg.Filters.Timeout == 0 {
+		cfg.Filters.Timeout = 5 * time.Second
 	}
 
 	return &cfg, nil
@@ -129,6 +147,21 @@ func (c *Config) Validate() error {
 	}
 	if c.Sampling.Model == "" {
 		return fmt.Errorf("sampling model cannot be empty")
+	}
+
+	// Validate filters config
+	if c.Filters.Enabled {
+		if c.Filters.ScriptPath == "" {
+			return fmt.Errorf("filters enabled but script_path is empty")
+		}
+		if c.Filters.Timeout <= 0 {
+			return fmt.Errorf("filters timeout must be positive")
+		}
+		// Check if script file exists (optional warning, not error)
+		if _, err := os.Stat(c.Filters.ScriptPath); os.IsNotExist(err) {
+			// Note: In strict mode, this would be an error, but we allow starting without the file
+			// The FilterManager will handle this based on strict_mode setting
+		}
 	}
 
 	// Validate downstream servers
