@@ -292,6 +292,74 @@ TODO (Nice-to-have):
 - Web UI for management
 - Performance optimizations
 
-## Support
+## Tasks
 
-[Add support information here]
+### build
+
+Compiles the panorganon binary.
+
+```bash
+# Get version from git tags or use dev
+VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+go build -ldflags "-X 'github.com/sevir/panorganon/pkg/version.Version=$VERSION' -X 'github.com/sevir/panorganon/pkg/version.Commit=$COMMIT' -X 'github.com/sevir/panorganon/pkg/version.BuildTime=$BUILD_TIME'" -o bin/panorganon ./cmd/panorganon
+```
+
+### build-and-copy
+
+Compiles the panorganon binary and copies it to ~/bin folder.
+
+```bash
+# Get version from git tags or use dev
+VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+go build -ldflags "-X 'github.com/sevir/panorganon/pkg/version.Version=$VERSION' -X 'github.com/sevir/panorganon/pkg/version.Commit=$COMMIT' -X 'github.com/sevir/panorganon/pkg/version.BuildTime=$BUILD_TIME'" -o bin/panorganon ./cmd/panorganon
+rm -f ~/bin/panorganon
+cp bin/panorganon ~/bin/panorganon
+```
+
+### release
+
+Compiles binaries for multiple platforms (Linux x64, Windows x64, macOS aarch64) and generates compressed releases in the `dist` folder.
+
+```bash
+# Create dist folder
+mkdir -p dist
+
+# Get version from git tags or use dev
+VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+# Function to build and zip
+build_and_zip() {
+    local os=$1
+    local arch=$2
+    local suffix=$3
+    local ext=$4
+    
+    echo "Building for $os-$arch..."
+    GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -ldflags "-X 'github.com/sevir/panorganon/pkg/version.Version=$VERSION' -X 'github.com/sevir/panorganon/pkg/version.Commit=$COMMIT' -X 'github.com/sevir/panorganon/pkg/version.BuildTime=$BUILD_TIME' -s -w" -o dist/panorganon-$suffix$ext ./cmd/panorganon
+    
+    echo "Zipping panorganon-$suffix$ext..."
+    cd dist
+    zip panorganon-$suffix.zip panorganon-$suffix$ext
+    rm panorganon-$suffix$ext
+    cd ..
+}
+
+# Linux x64
+build_and_zip linux amd64 linux-x64 ""
+
+# Windows x64
+build_and_zip windows amd64 windows-x64 ".exe"
+
+# macOS aarch64
+build_and_zip darwin arm64 darwin-arm64 ""
+
+echo "Release builds completed in dist/"
+```
