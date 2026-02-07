@@ -44,3 +44,17 @@ downstream_servers:
       - "/home/sevir/.config/hyper-mcp/search.yaml"
     env: {}
     keepalive: false
+
+  # Example: HTTP server launched automatically with start_cmd
+  # - name: "local-http-mcp"
+  #   type: "streamable-http"
+  #   url: "http://localhost:3001/mcp"
+  #   start_cmd: "node"
+  #   start_args:
+  #     - "./my-mcp-server.js"
+  #     - "--port"
+  #     - "3001"
+  #   start_wait_seconds: 5
+  #   env:
+  #     NODE_ENV: "production"
+  #   keepalive: true

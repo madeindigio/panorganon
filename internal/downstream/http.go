@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os/exec"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,6 +24,7 @@ type HTTPClient struct {
 	running    bool
 	mu         sync.RWMutex
 	nextID     atomic.Int64
+	cmd        *exec.Cmd
 }
 
 // NewHTTPClient creates a new HTTP client
@@ -35,22 +37,69 @@ func NewHTTPClient(cfg config.DownstreamServer, logger *zap.Logger) *HTTPClient 
 	}
 }
 
-// Start marks the HTTP client as ready (HTTP servers are already running)
+// Start launches the server process (if start_cmd is configured) and marks the HTTP client as ready
 func (c *HTTPClient) Start(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// Launch the server process if start_cmd is defined
+	if c.config.StartCmd != "" {
+		c.logger.Info("Launching server process",
+			zap.String("start_cmd", c.config.StartCmd),
+			zap.Strings("start_args", c.config.StartArgs),
+		)
+
+		c.cmd = exec.CommandContext(ctx, c.config.StartCmd, c.config.StartArgs...)
+
+		// Set environment variables
+		if c.config.Env != nil {
+			for k, v := range c.config.Env {
+				c.cmd.Env = append(c.cmd.Env, fmt.Sprintf("%s=%s", k, v))
+			}
+		}
+
+		if err := c.cmd.Start(); err != nil {
+			return fmt.Errorf("failed to start server process: %w", err)
+		}
+
+		// Monitor the process in the background
+		go c.monitorProcess()
+
+		// Wait for the server to be ready
+		waitSeconds := c.config.StartWaitSeconds
+		if waitSeconds <= 0 {
+			waitSeconds = 3
+		}
+
+		c.logger.Info("Waiting for server to be ready",
+			zap.Int("wait_seconds", waitSeconds),
+			zap.String("url", c.config.URL),
+		)
+		time.Sleep(time.Duration(waitSeconds) * time.Second)
+	}
 
 	c.logger.Info("HTTP client ready", zap.String("url", c.config.URL))
 	c.running = true
 	return nil
 }
 
-// Stop marks the HTTP client as stopped
+// Stop terminates the server process (if started) and marks the HTTP client as stopped
 func (c *HTTPClient) Stop() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	c.logger.Info("Stopping HTTP client")
+
+	// Kill the server process if we started it
+	if c.cmd != nil && c.cmd.Process != nil {
+		c.logger.Info("Terminating server process", zap.Int("pid", c.cmd.Process.Pid))
+		if err := c.cmd.Process.Kill(); err != nil {
+			c.logger.Warn("Failed to kill server process", zap.Error(err))
+		}
+		_ = c.cmd.Wait()
+		c.cmd = nil
+	}
+
 	c.running = false
 	return nil
 }
@@ -186,4 +235,23 @@ func (c *HTTPClient) GetName() string {
 // GetType returns the server type
 func (c *HTTPClient) GetType() string {
 	return c.config.Type
+}
+
+// monitorProcess monitors the launched server process
+func (c *HTTPClient) monitorProcess() {
+	if c.cmd == nil || c.cmd.Process == nil {
+		return
+	}
+
+	err := c.cmd.Wait()
+
+	c.mu.Lock()
+	c.running = false
+	c.mu.Unlock()
+
+	if err != nil {
+		c.logger.Error("Server process exited with error", zap.Error(err))
+	} else {
+		c.logger.Info("Server process exited normally")
+	}
 }

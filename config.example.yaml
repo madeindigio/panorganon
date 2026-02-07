@@ -1,0 +1,131 @@
+# =============================================================================
+# Panorganon Configuration - Complete Example
+# =============================================================================
+# This file documents all available configuration options for Panorganon,
+# an intelligent MCP (Model Context Protocol) orchestration server.
+#
+# Copy this file to config.yaml and adjust to your needs:
+#   cp config.example.yaml config.yaml
+#
+# Run with:
+#   panorganon --config config.yaml
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Server Configuration
+# -----------------------------------------------------------------------------
+# Configure MCP transport layer(s) that Panorganon will use to communicate
+# with clients (e.g., Claude Code, Cursor, etc.)
+server:
+  # stdio transport - direct process communication (most common for MCP clients)
+  stdio:
+    enabled: true                     # Enable/disable stdio transport
+
+  # HTTP transport - streamable-http protocol for network-based clients
+  http:
+    enabled: false                    # Enable/disable HTTP transport
+    port: 8080                        # Port to listen on (1-65535)
+    endpoint: "/mcp"                  # HTTP endpoint path
+
+# -----------------------------------------------------------------------------
+# Logging Configuration
+# -----------------------------------------------------------------------------
+# Structured logging with automatic rotation (lumberjack).
+# Rotation: max 100MB per file, 10 backups, 30 days, compression enabled.
+# CLI override: --log-level debug --log-file /path/to/log
+logging:
+  level: info                         # Log level: debug, info, warn, error
+  file: "./logs/panorganon.log"       # Path to log file
+
+# -----------------------------------------------------------------------------
+# Database Configuration
+# -----------------------------------------------------------------------------
+# SQLite database for caching tool metadata from downstream servers.
+database:
+  path: "./panorganon.db"             # Path to SQLite database file
+
+# -----------------------------------------------------------------------------
+# LLM Sampling Configuration
+# -----------------------------------------------------------------------------
+# LLM provider used for intelligent tool search (semantic matching).
+# Supports: anthropic, openai
+sampling:
+  provider: "anthropic"               # Provider: "anthropic" or "openai"
+  api_key: "${ANTHROPIC_API_KEY}"     # API key (supports env var expansion)
+  model: "claude-sonnet-4-5-20250929" # Model to use for sampling
+
+# -----------------------------------------------------------------------------
+# Lua Filters Configuration
+# -----------------------------------------------------------------------------
+# Intercept and modify tool calls to downstream servers using Lua scripts.
+# Enables security, privacy, auditing, and data transformation.
+filters:
+  enabled: false                      # Enable/disable Lua filters
+  script_path: "./filters.lua"        # Path to Lua filter script (supports env vars)
+  timeout: 5s                         # Max execution time per filter call
+  strict_mode: false                  # If true, fail on missing script; if false, skip
+  hot_reload: false                   # Reload script on file changes without restart
+  log_filtered_data: false            # Log filtered/modified data (use with caution)
+
+# -----------------------------------------------------------------------------
+# Downstream Servers
+# -----------------------------------------------------------------------------
+# List of MCP servers that Panorganon will orchestrate.
+# Supported types: stdio, streamable-http, sse
+#
+# Common fields for all types:
+#   name:       (required) Unique identifier for the server
+#   type:       (required) Server type: "stdio", "streamable-http", or "sse"
+#   env:        (optional) Environment variables for the server process
+#   keepalive:  (optional) If true, server stays running; if false, started on-demand
+#
+# stdio-specific fields:
+#   command:    (required) Command/binary to execute
+#   args:       (optional) Command-line arguments
+#
+# streamable-http / sse specific fields:
+#   url:              (required) HTTP endpoint URL of the remote MCP server
+#   start_cmd:        (optional) Command to launch the server process before connecting
+#   start_args:       (optional) Arguments for start_cmd
+#   start_wait_seconds: (optional) Seconds to wait after launching before connecting
+#                       (default: 3). Allows the server time to initialize.
+downstream_servers:
+  # --- Example: stdio server (local process via stdin/stdout) ---
+  - name: "filesystem-tools"
+    type: "stdio"
+    command: "npx"
+    args:
+      - "-y"
+      - "@modelcontextprotocol/server-filesystem"
+      - "/tmp"
+    env: {}
+    keepalive: false
+
+  # --- Example: Remote HTTP server (already running) ---
+  - name: "remote-api"
+    type: "streamable-http"
+    url: "https://mcp.example.com/api"
+    keepalive: true
+
+  # --- Example: HTTP server with start_cmd (launched automatically) ---
+  # Panorganon will execute start_cmd, wait start_wait_seconds, then connect to url.
+  # The process is terminated when the server is stopped.
+  - name: "local-http-server"
+    type: "streamable-http"
+    url: "http://localhost:3001/mcp"
+    start_cmd: "node"
+    start_args:
+      - "./servers/my-mcp-server.js"
+      - "--port"
+      - "3001"
+    start_wait_seconds: 5
+    env:
+      NODE_ENV: "production"
+      API_KEY: "${MY_API_KEY}"
+    keepalive: true
+
+  # --- Example: SSE server (Server-Sent Events) ---
+  - name: "sse-server"
+    type: "sse"
+    url: "http://localhost:9090/events"
+    keepalive: false

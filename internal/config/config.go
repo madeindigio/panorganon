@@ -66,13 +66,16 @@ type FiltersConfig struct {
 
 // DownstreamServer represents a downstream MCP server configuration
 type DownstreamServer struct {
-	Name      string            `mapstructure:"name"`
-	Type      string            `mapstructure:"type"` // stdio, streamable-http, sse
-	Command   string            `mapstructure:"command"`
-	Args      []string          `mapstructure:"args"`
-	URL       string            `mapstructure:"url"`
-	Env       map[string]string `mapstructure:"env"`
-	KeepAlive bool              `mapstructure:"keepalive"`
+	Name             string            `mapstructure:"name"`
+	Type             string            `mapstructure:"type"` // stdio, streamable-http, sse
+	Command          string            `mapstructure:"command"`
+	Args             []string          `mapstructure:"args"`
+	URL              string            `mapstructure:"url"`
+	Env              map[string]string `mapstructure:"env"`
+	KeepAlive        bool              `mapstructure:"keepalive"`
+	StartCmd         string            `mapstructure:"start_cmd"`
+	StartArgs        []string          `mapstructure:"start_args"`
+	StartWaitSeconds int               `mapstructure:"start_wait_seconds"`
 }
 
 // LoadConfig loads and parses the configuration file
@@ -105,6 +108,13 @@ func LoadConfig(configPath string) (*Config, error) {
 	// Set default values for filters if not specified
 	if cfg.Filters.Timeout == 0 {
 		cfg.Filters.Timeout = 5 * time.Second
+	}
+
+	// Set default start_wait_seconds for servers with start_cmd
+	for i := range cfg.DownstreamServers {
+		if cfg.DownstreamServers[i].StartCmd != "" && cfg.DownstreamServers[i].StartWaitSeconds <= 0 {
+			cfg.DownstreamServers[i].StartWaitSeconds = 3
+		}
 	}
 
 	return &cfg, nil
@@ -182,6 +192,9 @@ func (c *Config) Validate() error {
 		}
 		if (srv.Type == "streamable-http" || srv.Type == "sse") && srv.URL == "" {
 			return fmt.Errorf("downstream server '%s': URL cannot be empty for %s type", srv.Name, srv.Type)
+		}
+		if srv.StartCmd != "" && srv.Type == "stdio" {
+			return fmt.Errorf("downstream server '%s': start_cmd is not supported for stdio type (use command instead)", srv.Name)
 		}
 	}
 
