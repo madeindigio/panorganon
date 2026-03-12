@@ -21,11 +21,17 @@ type SearchResult struct {
 	Score       float64                `json:"score"`
 }
 
+// MCPSampler is an interface for requesting sampling from MCP clients
+type MCPSampler interface {
+	RequestSampling(ctx context.Context, request interface{}) (interface{}, error)
+}
+
 // SearchService handles intelligent tool search using LLM sampling
 type SearchService struct {
 	db           *database.DB
 	logger       *zap.Logger
 	samplingCfg  SamplingConfig
+	mcpServer    MCPSampler
 	cache        map[string]*cachedSearch
 	cacheMux     sync.RWMutex
 	cacheTTL     time.Duration
@@ -50,9 +56,16 @@ func NewSearchService(db *database.DB, logger *zap.Logger, cfg SamplingConfig) *
 		db:          db,
 		logger:      logger.With(zap.String("component", "search")),
 		samplingCfg: cfg,
+		mcpServer:   nil, // Will be set later via SetMCPServer
 		cache:       make(map[string]*cachedSearch),
 		cacheTTL:    5 * time.Minute,
 	}
+}
+
+// SetMCPServer sets the MCP server for client-side sampling
+func (s *SearchService) SetMCPServer(mcpServer MCPSampler) {
+	s.mcpServer = mcpServer
+	s.logger.Info("MCP server configured for client-side sampling")
 }
 
 // SearchTools searches for tools based on a task description using LLM sampling

@@ -31,6 +31,10 @@ func NewMCPServer(handlers *ToolHandlers) *server.MCPServer {
 		server.WithToolCapabilities(true),
 	)
 
+	// Enable sampling to allow requesting LLM completions from the client
+	s.EnableSampling()
+	handlers.Logger.Info("MCP sampling enabled - will use client-side models for tool search")
+
 	// Register search_tools tool
 	searchToolsTool := mcp.NewTool("search_tools",
 		mcp.WithDescription("Search for appropriate tools based on a task description. Returns relevant tools from downstream MCP servers that can help accomplish the specified task."),
